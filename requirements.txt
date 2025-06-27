@@ -1,0 +1,20 @@
+# BrainBoost core dependencies
+-e file:///brainboost/packages/subjective_abstract_data_source_package
+-e file:///brainboost/packages/brainboost_data_source_logger_package
+-e file:///brainboost/packages/brainboost_configuration_package
+
+# Core data source framework
+subjective-abstract-data-source-package>=1.0.0
+
+# AI transcription
+openai-whisper>=20231117
+
+# Audio/Video processing
+pydub>=0.25.1
+ffmpeg-python>=0.2.0
+
+# Environment and configuration
+python-dotenv>=1.0.0
+
+# Standard libraries (usually included with Python, but listed for completeness)
+# os, sys, tempfile, logging, datetime, glob, json, hashlib, time are built-in

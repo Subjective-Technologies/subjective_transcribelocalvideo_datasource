@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+myenv/
+venv/
+env/
+.venv/
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+local_video_transcription.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Video files (optional - uncomment if you don't want to track video files)
+# *.mp4
+# *.mkv
+# *.avi
+# *.mov
+
+# Context/output files (optional - uncomment if you don't want to track generated transcriptions)
+# context/
+# *.json
+
+# Temporary files
+*.tmp
+*.temp 
