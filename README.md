@@ -43,8 +43,8 @@ choco install ffmpeg
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/Subjective-Technologies/transcribelocalvideo_datasource.git
-cd transcribelocalvideo_datasource
+git clone git@github.com:Subjective-Technologies/subjective_transcribelocalvideo_datasource.git
+cd subjective_transcribelocalvideo_datasource
 ```
 
 2. **Create and activate virtual environment:**
@@ -219,7 +219,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 For support and questions:
-- Issues: [GitHub Issues](https://github.com/Subjective-Technologies/transcribelocalvideo_datasource/issues)
+- Issues: [GitHub Issues](https://github.com/Subjective-Technologies/subjective_transcribelocalvideo_datasource/issues)
 - Email: support@subjectivetechnologies.com
 
 ## Changelog
