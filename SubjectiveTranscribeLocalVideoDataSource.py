@@ -124,16 +124,15 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         """
         Return SVG icon for the video transcription data source.
         """
-        return """
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="3" y="4" width="18" height="12" rx="2" stroke="currentColor" stroke-width="2" fill="none"/>
-            <path d="M10 8L15 11L10 14V8Z" fill="currentColor"/>
-            <path d="M3 20H21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <circle cx="5" cy="20" r="1" fill="currentColor"/>
-            <circle cx="12" cy="20" r="1" fill="currentColor"/>
-            <circle cx="19" cy="20" r="1" fill="currentColor"/>
-        </svg>
-        """
+        import os
+        icon_path = os.path.join(os.path.dirname(__file__), 'icon.svg')
+        try:
+            if os.path.exists(icon_path):
+                with open(icon_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+        except Exception:
+            pass
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2" fill="#111827"/><path d="M10 8L15 11L10 14V8Z" fill="#fff"/></svg>'
 
     def get_connection_data(self):
         """
