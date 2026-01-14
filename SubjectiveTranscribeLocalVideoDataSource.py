@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 import whisper
 from pydub import AudioSegment
+from pydub.utils import which
 import glob
 import json
 import hashlib
@@ -36,10 +37,13 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         )
         
         # Initialize configuration from params or environment variables
-        self.whisper_model_size = self.params.get('whisper_model_size', WHISPER_MODEL_SIZE)
-        self.videos_dir = self.params.get('videos_dir', os.getenv("VIDEOS_DIR", "videos"))
-        self.context_dir = self.params.get('context_dir', os.getenv("CONTEXT_DIR", "context"))
+        self.whisper_model_size = self.params.get('whisper_model_size') or os.getenv("WHISPER_MODEL_SIZE") or WHISPER_MODEL_SIZE
+        self.videos_dir = self.params.get('videos_dir') or os.getenv("VIDEOS_DIR")
+        context_dir = self.params.get('context_dir') or self.params.get("TARGET_DIRECTORY") or os.getenv("CONTEXT_DIR")
+        self.context_dir = context_dir if context_dir else "context"
         self.specific_video_path = self.params.get('specific_video_path', None)
+
+        self._configure_ffmpeg()
         
         # Initialize Whisper model (will be loaded when needed)
         self.whisper_model = None
@@ -54,6 +58,10 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         """
         try:
             self._update_status("Starting video transcription process")
+
+            if not self.specific_video_path and not self.videos_dir:
+                self._update_status("No videos_dir configured; waiting for pipeline input")
+                return
             
             # Get list of video files to process
             video_files = self._get_video_files()
@@ -148,6 +156,31 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
             ]
         }
 
+    def process_input(self, data):
+        """
+        Process a single video file triggered by pipeline input.
+        """
+        if not isinstance(data, dict):
+            return
+
+        video_path = data.get("path") or data.get("dest_path")
+        if not video_path:
+            return
+
+        if not video_path.endswith(('.mp4', '.mkv')):
+            return
+
+        if not self.context_dir:
+            self.context_dir = self._resolve_context_path()
+
+        os.makedirs(self.context_dir, exist_ok=True)
+
+        if not self.whisper_model_size:
+            self.whisper_model_size = WHISPER_MODEL_SIZE
+
+        self._load_whisper_model()
+        self._process_video_file(video_path)
+
     def _get_video_files(self):
         """
         Get list of video files to process based on configuration.
@@ -163,6 +196,8 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
             return [self.specific_video_path]
         else:
             # Process all videos in directory
+            if not self.videos_dir:
+                return []
             if not os.path.exists(self.videos_dir):
                 raise FileNotFoundError(f"Videos directory '{self.videos_dir}' not found")
             
@@ -201,8 +236,8 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
                     
                     if transcript:
                         # Save transcript as JSON
-                        output_path = self._generate_output_path(video_path)
-                        self._save_transcript_as_json(transcript, video_path, output_path)
+                        output_payload = self._build_transcript_payload(transcript, video_path)
+                        output_path = self._write_context_output(output_payload)
                         
                         # Notify subscribers with transcription data
                         transcription_data = {
@@ -243,6 +278,23 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
             logging.error(f"Error extracting audio from {video_path}: {e}")
             return None
 
+    def _configure_ffmpeg(self):
+        """
+        Ensure ffmpeg is available for pydub audio extraction.
+        """
+        if which("ffmpeg"):
+            return
+
+        try:
+            import imageio_ffmpeg
+        except Exception:
+            logging.warning("ffmpeg not found and imageio-ffmpeg not available")
+            return
+
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        if ffmpeg_path and os.path.exists(ffmpeg_path):
+            AudioSegment.converter = ffmpeg_path
+
     def _transcribe_audio(self, audio_path):
         """
         Transcribe audio to text using Whisper.
@@ -255,19 +307,9 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
             logging.error(f"Error transcribing {audio_path}: {e}")
             return ""
 
-    def _generate_output_path(self, video_path):
+    def _build_transcript_payload(self, transcript, video_path):
         """
-        Generate output filename using video recording time.
-        """
-        video_mtime = os.path.getmtime(video_path)
-        video_recording_datetime = datetime.fromtimestamp(video_mtime)
-        timestamp = video_recording_datetime.strftime("%Y%m%d%H%M%S")
-        output_filename = f"context-{timestamp}.json"
-        return os.path.join(self.context_dir, output_filename)
-
-    def _save_transcript_as_json(self, transcript, video_path, output_path):
-        """
-        Save transcript as JSON with all metadata and transcription field.
+        Build transcript payload for parent context writer.
         """
         video_hash = self._get_video_hash(video_path)
         video_size = os.path.getsize(video_path)
@@ -287,9 +329,7 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
             'whisper_model': self.whisper_model_size,
             'transcription': transcript
         }
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        return data
 
     def _get_video_hash(self, video_path):
         """
@@ -375,4 +415,63 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
                 self.get_total_to_process(),
                 self.get_total_processed(),
                 self.estimated_remaining_time()
-            ) 
+            )
+
+    def process_input(self, data):
+        """
+        Process input data from a pipeline dependency (e.g., file change notification).
+        This method is called when this data source is part of a pipeline and receives
+        data from a dependency data source.
+
+        Args:
+            data: Input data from the dependency (typically a file change notification)
+        """
+        try:
+            logging.info(f"Received pipeline input: {data}")
+
+            # Extract the file path from the notification data
+            file_path = None
+            if isinstance(data, dict):
+                # Try different common keys for file path
+                file_path = data.get('path') or data.get('dest_path') or data.get('file_path')
+            elif isinstance(data, str):
+                file_path = data
+
+            if not file_path:
+                logging.warning(f"No file path found in pipeline input: {data}")
+                return
+
+            # Check if it's a video file
+            if not file_path.endswith(('.mp4', '.mkv')):
+                logging.info(f"Ignoring non-video file: {file_path}")
+                return
+
+            # Check if the file exists
+            if not os.path.exists(file_path):
+                logging.warning(f"File does not exist: {file_path}")
+                return
+
+            # Check if context file already exists
+            if self._context_file_exists(file_path):
+                logging.info(f"Context file already exists for {os.path.basename(file_path)}, skipping")
+                return
+
+            # Load Whisper model if not already loaded
+            if not self.whisper_model:
+                self._update_status(f"Loading Whisper model ({self.whisper_model_size})")
+                self._load_whisper_model()
+
+            # Process the video file
+            self._update_status(f"Processing video from pipeline: {os.path.basename(file_path)}")
+            success = self._process_video_file(file_path)
+
+            if success:
+                self._update_status(f"Successfully transcribed: {os.path.basename(file_path)}")
+                self.processed_count += 1
+            else:
+                self._update_status(f"Failed to transcribe: {os.path.basename(file_path)}")
+
+        except Exception as e:
+            error_msg = f"Error processing pipeline input: {str(e)}"
+            logging.error(error_msg)
+            self._update_status(error_msg) 
