@@ -11,6 +11,7 @@ import hashlib
 import time
 from dotenv import load_dotenv
 from subjective_abstract_data_source_package import SubjectiveDataSource
+from brainboost_data_source_logger_package.BBLogger import BBLogger
 
 # Load environment variables
 load_dotenv()
@@ -178,6 +179,7 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         if not self.whisper_model_size:
             self.whisper_model_size = WHISPER_MODEL_SIZE
 
+        BBLogger.log(f"TranscribeLocalVideo process_input starting for {video_path}")
         self._load_whisper_model()
         self._process_video_file(video_path)
 
@@ -214,6 +216,7 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         Load the Whisper model for transcription.
         """
         if not self.whisper_model:
+            BBLogger.log(f"Loading Whisper model '{self.whisper_model_size}'")
             self.whisper_model = whisper.load_model(self.whisper_model_size)
             logging.info(f"Loaded Whisper model '{self.whisper_model_size}'")
 
@@ -222,6 +225,7 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         Process a single video file for transcription.
         """
         try:
+            BBLogger.log(f"Processing video: {video_path}")
             logging.info(f"Processing video: {video_path}")
             
             # Create temporary directory for audio processing
@@ -229,15 +233,17 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
                 # Extract audio from video
                 wav_path = os.path.join(tmpdirname, "audio.wav")
                 audio_file = self._extract_audio_from_video(video_path, wav_path)
-                
+
                 if audio_file:
+                    BBLogger.log(f"Audio extracted to {audio_file}")
                     # Transcribe audio
                     transcript = self._transcribe_audio(audio_file)
-                    
+
                     if transcript:
                         # Save transcript as JSON
                         output_payload = self._build_transcript_payload(transcript, video_path)
                         output_path = self._write_context_output(output_payload)
+                        BBLogger.log(f"Transcript saved to {output_path}")
                         
                         # Notify subscribers with transcription data
                         transcription_data = {
@@ -253,11 +259,14 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
                         logging.info(f"Transcript saved to {output_path}")
                         return True
                     else:
+                        BBLogger.log(f"No transcript generated for {os.path.basename(video_path)}")
                         logging.warning(f"No transcript was generated for {os.path.basename(video_path)}")
                 else:
+                    BBLogger.log(f"Failed to extract audio from {os.path.basename(video_path)}")
                     logging.error(f"Failed to extract audio from {os.path.basename(video_path)}")
-                    
+
         except Exception as e:
+            BBLogger.log(f"Error processing video {video_path}: {e}")
             logging.error(f"Error processing video {video_path}: {e}")
             
         return False
@@ -272,9 +281,11 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
             audio = audio.set_channels(1)
             # Export as WAV
             audio.export(output_path, format="wav")
+            BBLogger.log(f"Extracted audio to {output_path}")
             logging.info(f"Extracted audio from {video_path} to {output_path}")
             return output_path
         except Exception as e:
+            BBLogger.log(f"Error extracting audio from {video_path}: {e}")
             logging.error(f"Error extracting audio from {video_path}: {e}")
             return None
 
@@ -301,9 +312,11 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         """
         try:
             result = self.whisper_model.transcribe(audio_path)
+            BBLogger.log(f"Transcribed audio file {audio_path}")
             logging.info(f"Transcribed audio file {audio_path}")
             return result['text']
         except Exception as e:
+            BBLogger.log(f"Error transcribing {audio_path}: {e}")
             logging.error(f"Error transcribing {audio_path}: {e}")
             return ""
 
@@ -403,6 +416,7 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         """
         if self.status_callback:
             self.status_callback(self.get_name(), status)
+        BBLogger.log(f"[{self.get_name()}] {status}")
         logging.info(f"[{self.get_name()}] {status}")
 
     def _update_progress(self):
