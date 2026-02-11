@@ -1,0 +1,67 @@
+{
+  "domainCategory": "Media & Content",
+  "subjectiveTechnologyElement": "Pipelines",
+  "sections": [
+    {
+      "type": "splitList",
+      "title": "Transcribe Local Video",
+      "text": "Data source for transcribing local video files using Whisper AI. Converts video files to audio and generates transcriptions stored as JSON context files.",
+      "image": {
+        "src": "/subjective_transcribelocalvideo_datasource/icon.svg",
+        "alt": "Transcribe Local Video icon"
+      },
+      "list": [
+        "Connection type: LOCAL_VIDEO_TRANSCRIPTION",
+        "Config fields: videos_dir, context_dir, whisper_model_size, specific_video_path",
+        "Output: Writes BrainBoost context artifacts and emits structured items downstream."
+      ]
+    },
+    {
+      "type": "example",
+      "title": "Typical workflow",
+      "intro": "Configure Transcribe Local Video with the connection fields and run it as part of a BrainBoost pipeline.",
+      "cards": [
+        {
+          "title": "Connect",
+          "text": "Provide videos_dir, context_dir, whisper_model_size, specific_video_path in the connection form."
+        },
+        {
+          "title": "Fetch",
+          "text": "Run `fetch()` to ingest, transform, or stream data."
+        },
+        {
+          "title": "Consume",
+          "text": "Use the emitted items in downstream indexing, search, or automation steps."
+        }
+      ]
+    },
+    {
+      "type": "faq",
+      "title": "FAQ",
+      "items": [
+        {
+          "q": "What do I need to configure?",
+          "a": "At minimum: videos_dir, context_dir, whisper_model_size, specific_video_path. Additional fields may be optional depending on your use case."
+        },
+        {
+          "q": "What does it output?",
+          "a": "Writes BrainBoost context artifacts and emits structured items downstream."
+        },
+        {
+          "q": "Where does the data go?",
+          "a": "Outputs are emitted to downstream subscribers in the BrainBoost pipeline. Some datasources also write artifacts (context files, catalogs, or exports) locally based on your configuration."
+        }
+      ]
+    },
+    {
+      "type": "finalCta",
+      "title": "Ready to use Transcribe Local Video?",
+      "text": "Add it to your BrainBoost pipeline and start ingesting.",
+      "primaryCta": {
+        "label": "Get Subjective Client",
+        "href": "/subjective-client-download"
+      },
+      "subtext": "Run this datasource locally with your own credentials and storage."
+    }
+  ]
+}
