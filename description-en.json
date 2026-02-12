@@ -1,4 +1,5 @@
 {
+  "description": "Transcribes local video files with Whisper, extracts audio/text artifacts, and writes JSON context outputs for search and analysis.",
   "domainCategory": "Media & Content",
   "subjectiveTechnologyElement": "Pipelines",
   "publisher": "BrainBoost Ltd.",
@@ -9,7 +10,7 @@
     {
       "type": "splitList",
       "title": "Transcribe Local Video",
-      "text": "Data source for transcribing local video files using Whisper AI. Converts video files to audio and generates transcriptions stored as JSON context files.",
+      "text": "Transcribes local video files with Whisper, extracts audio/text artifacts, and writes JSON context outputs for search and analysis.",
       "image": {
         "src": "/subjective_transcribelocalvideo_datasource/icon.svg",
         "alt": "Transcribe Local Video icon"
