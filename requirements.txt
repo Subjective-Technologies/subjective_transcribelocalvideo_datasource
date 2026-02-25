@@ -18,3 +18,4 @@ python-dotenv>=1.0.0
 
 # Standard libraries (usually included with Python, but listed for completeness)
 # os, sys, tempfile, logging, datetime, glob, json, hashlib, time are built-in
+git+https://github.com/Subjective-Technologies/brainboost_rclone_oauth_package.git

@@ -1,4 +1,6 @@
 import os
+import sys
+import shutil
 import tempfile
 import logging
 from datetime import datetime
@@ -12,6 +14,7 @@ import time
 from dotenv import load_dotenv
 from subjective_abstract_data_source_package import SubjectiveDataSource
 from brainboost_data_source_logger_package.BBLogger import BBLogger
+from brainboost_configuration_package.BBConfig import BBConfig
 
 # Load environment variables
 load_dotenv()
@@ -52,6 +55,7 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         # Track processing state
         self.processed_count = 0
         self.skipped_count = 0
+        self._metadata_check_failures = set()
 
     def fetch(self):
         """
@@ -157,31 +161,6 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
             ]
         }
 
-    def process_input(self, data):
-        """
-        Process a single video file triggered by pipeline input.
-        """
-        if not isinstance(data, dict):
-            return
-
-        video_path = data.get("path") or data.get("dest_path")
-        if not video_path:
-            return
-
-        if not video_path.endswith(('.mp4', '.mkv')):
-            return
-
-        if not self.context_dir:
-            self.context_dir = self._resolve_context_path()
-
-        os.makedirs(self.context_dir, exist_ok=True)
-
-        if not self.whisper_model_size:
-            self.whisper_model_size = WHISPER_MODEL_SIZE
-
-        BBLogger.log(f"TranscribeLocalVideo process_input starting for {video_path}")
-        self._load_whisper_model()
-        self._process_video_file(video_path)
 
     def _get_video_files(self):
         """
@@ -274,9 +253,30 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
     def _extract_audio_from_video(self, video_path, output_path):
         """
         Extract audio from video file and save as WAV.
+        On Windows, paths with spaces can cause WinError 2 when pydub/ffmpeg
+        are used; we copy to a temp file with a safe name (no spaces) first.
         """
+        work_path = video_path
+        temp_video_copy = None
         try:
-            audio = AudioSegment.from_file(video_path)
+            # Re-configure ffmpeg right before use — the class-level
+            # AudioSegment.converter can be reset to the bare "ffmpeg" string
+            # if the module is re-imported or the class is re-evaluated.
+            self._configure_ffmpeg()
+            BBLogger.log(f"AudioSegment.converter before extraction: {AudioSegment.converter}")
+
+            # Use a temp copy with no spaces to avoid WinError 2 / "file not found"
+            # when the original path contains spaces (common on Windows with pydub/ffmpeg).
+            if not os.path.exists(video_path):
+                raise FileNotFoundError(f"Video file not found: {video_path}")
+            if " " in video_path:
+                tmpdir = os.path.dirname(output_path)
+                ext = os.path.splitext(video_path)[1] or ".mp4"
+                temp_video_copy = os.path.join(tmpdir, "input_video" + ext)
+                shutil.copy2(video_path, temp_video_copy)
+                work_path = temp_video_copy
+                BBLogger.log(f"Using temp copy (no spaces) for extraction: {work_path}")
+            audio = AudioSegment.from_file(work_path)
             # Convert to mono for better transcription
             audio = audio.set_channels(1)
             # Export as WAV
@@ -288,23 +288,79 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
             BBLogger.log(f"Error extracting audio from {video_path}: {e}")
             logging.error(f"Error extracting audio from {video_path}: {e}")
             return None
+        finally:
+            if temp_video_copy and os.path.exists(temp_video_copy):
+                try:
+                    os.remove(temp_video_copy)
+                except Exception:
+                    pass
 
     def _configure_ffmpeg(self):
         """
         Ensure ffmpeg is available for pydub audio extraction.
+        Caches the resolved path in self._ffmpeg_path to avoid repeated lookups
+        and re-applies it to AudioSegment.converter each time (the class variable
+        can be reset if the module is re-imported).
         """
+        # Fast path: reuse previously resolved path
+        cached = getattr(self, '_ffmpeg_path', None)
+        if cached and os.path.exists(cached):
+            AudioSegment.converter = cached
+            return
+
+        # Check plugin-local deps/bin/{platform}/ directory
+        plugin_dir = os.path.dirname(__file__)
+        if os.name == "nt":
+            local_ffmpeg = os.path.join(plugin_dir, "deps", "bin", "windows", "ffmpeg.exe")
+        elif sys.platform == "darwin":
+            local_ffmpeg = os.path.join(plugin_dir, "deps", "bin", "mac", "ffmpeg")
+        else:
+            local_ffmpeg = os.path.join(plugin_dir, "deps", "bin", "linux", "ffmpeg")
+
+        if os.path.exists(local_ffmpeg):
+            AudioSegment.converter = local_ffmpeg
+            self._ffmpeg_path = local_ffmpeg
+            BBLogger.log(f"Using ffmpeg from plugin deps: {local_ffmpeg}")
+            return
+
+        ffmpeg_path = None
+        for key in ("FFMPEG_PATH", "FFMPEG_BINARY", "FFMPEG_EXE", "FFMPEG"):
+            try:
+                ffmpeg_path = BBConfig.get(key)
+                if ffmpeg_path:
+                    break
+            except Exception:
+                continue
+
+        if not ffmpeg_path:
+            ffmpeg_path = os.getenv("FFMPEG_PATH") or os.getenv("FFMPEG_BINARY")
+
+        if ffmpeg_path:
+            candidate = ffmpeg_path
+            if os.path.isdir(candidate):
+                candidate = os.path.join(candidate, "ffmpeg.exe")
+            if os.path.exists(candidate):
+                AudioSegment.converter = candidate
+                self._ffmpeg_path = candidate
+                BBLogger.log(f"Using ffmpeg from config: {candidate}")
+                return
+
         if which("ffmpeg"):
+            BBLogger.log("Found ffmpeg on PATH")
             return
 
         try:
             import imageio_ffmpeg
         except Exception:
+            BBLogger.log("ffmpeg not found and imageio-ffmpeg not available")
             logging.warning("ffmpeg not found and imageio-ffmpeg not available")
             return
 
         ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
         if ffmpeg_path and os.path.exists(ffmpeg_path):
             AudioSegment.converter = ffmpeg_path
+            self._ffmpeg_path = ffmpeg_path
+            BBLogger.log(f"Using ffmpeg from imageio-ffmpeg: {ffmpeg_path}")
 
     def _transcribe_audio(self, audio_path):
         """
@@ -368,6 +424,47 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
             logging.error(f"Error generating hash for {video_path}: {e}")
             return None
 
+    def _wait_for_stable_file(self, file_path, timeout=60, stability_period=3):
+        """
+        Wait for a file to exist and have a stable size (not being written to).
+        Returns True when the file is ready, False if timeout is reached.
+        """
+        # First wait for file to appear
+        elapsed = 0
+        while not os.path.exists(file_path) and elapsed < timeout:
+            BBLogger.log(f"[TranscribeLocalVideo] Waiting for file to appear: {file_path}")
+            time.sleep(2)
+            elapsed += 2
+        if not os.path.exists(file_path):
+            BBLogger.log(f"[TranscribeLocalVideo] File never appeared after {timeout}s: {file_path}")
+            return False
+
+        # Wait for file size to stabilize (not being written to anymore)
+        last_size = -1
+        stable_for = 0
+        while stable_for < stability_period and elapsed < timeout:
+            try:
+                current_size = os.path.getsize(file_path)
+            except OSError:
+                time.sleep(1)
+                elapsed += 1
+                continue
+            if current_size == last_size and current_size > 0:
+                stable_for += 1
+            else:
+                stable_for = 0
+            last_size = current_size
+            if stable_for < stability_period:
+                time.sleep(1)
+                elapsed += 1
+
+        if stable_for >= stability_period:
+            BBLogger.log(f"[TranscribeLocalVideo] File is stable ({last_size} bytes): {file_path}")
+            return True
+        else:
+            BBLogger.log(f"[TranscribeLocalVideo] File size not stable after {timeout}s: {file_path}")
+            return False
+
     def _context_file_exists(self, video_path):
         """
         Check if a context file already exists for this video using multiple methods.
@@ -391,23 +488,38 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         try:
             with open(context_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                
-            # Check multiple ways to match the video
-            # Method 1: Exact video path match
-            if data.get('video_path') == video_path:
-                return True
-                
-            # Method 2: Video filename match
-            if data.get('video_filename') == video_filename:
-                return True
-                
-            # Method 3: Hash match (if available)
-            if video_hash and data.get('video_hash') == video_hash:
-                return True
+
+            if isinstance(data, list):
+                for item in data:
+                    if self._metadata_matches(item, video_path, video_hash, video_filename):
+                        return True
+                return False
+
+            return self._metadata_matches(data, video_path, video_hash, video_filename)
         
         except Exception as e:
-            logging.error(f"Error checking metadata in {context_file}: {e}")
+            if context_file not in self._metadata_check_failures:
+                logging.error(f"Error checking metadata in {context_file}: {e}")
+                self._metadata_check_failures.add(context_file)
         
+        return False
+
+    def _metadata_matches(self, data, video_path, video_hash, video_filename):
+        if not isinstance(data, dict):
+            return False
+
+        # Method 1: Exact video path match
+        if data.get('video_path') == video_path:
+            return True
+
+        # Method 2: Video filename match
+        if data.get('video_filename') == video_filename:
+            return True
+
+        # Method 3: Hash match (if available)
+        if video_hash and data.get('video_hash') == video_hash:
+            return True
+
         return False
 
     def _update_status(self, status):
@@ -441,7 +553,14 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
             data: Input data from the dependency (typically a file change notification)
         """
         try:
-            logging.info(f"Received pipeline input: {data}")
+            BBLogger.log(f"[TranscribeLocalVideo] Received pipeline input: {data}")
+
+            # Only process 'created' events (new files)
+            if isinstance(data, dict):
+                event_type = data.get('event_type', '')
+                if event_type != 'created':
+                    BBLogger.log(f"[TranscribeLocalVideo] Ignoring event_type '{event_type}' (only processing 'created')")
+                    return
 
             # Extract the file path from the notification data
             file_path = None
@@ -452,40 +571,55 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
                 file_path = data
 
             if not file_path:
-                logging.warning(f"No file path found in pipeline input: {data}")
+                BBLogger.log(f"[TranscribeLocalVideo] No file path found in pipeline input: {data}")
                 return
 
             # Check if it's a video file
-            if not file_path.endswith(('.mp4', '.mkv')):
-                logging.info(f"Ignoring non-video file: {file_path}")
+            if not file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
+                BBLogger.log(f"[TranscribeLocalVideo] Ignoring non-video file: {file_path}")
                 return
 
-            # Check if the file exists
-            if not os.path.exists(file_path):
-                logging.warning(f"File does not exist: {file_path}")
+            # Wait for the file to exist and be fully written (stable size)
+            if not self._wait_for_stable_file(file_path):
+                BBLogger.log(f"[TranscribeLocalVideo] File not available or still being written: {file_path}")
                 return
+
+            # Ensure context_dir is an absolute path
+            if not self.context_dir or self.context_dir == "context":
+                # Use default context directory
+                config = BBConfig()
+                self.context_dir = config.get("context_dir", os.path.join(os.getcwd(), "com_subjective_userdata", "com_subjective_context"))
+                BBLogger.log(f"[TranscribeLocalVideo] Using context_dir: {self.context_dir}")
+
+            os.makedirs(self.context_dir, exist_ok=True)
 
             # Check if context file already exists
             if self._context_file_exists(file_path):
-                logging.info(f"Context file already exists for {os.path.basename(file_path)}, skipping")
+                BBLogger.log(f"[TranscribeLocalVideo] Context file already exists for {os.path.basename(file_path)}, skipping")
                 return
 
             # Load Whisper model if not already loaded
             if not self.whisper_model:
+                BBLogger.log(f"[TranscribeLocalVideo] Loading Whisper model ({self.whisper_model_size})")
                 self._update_status(f"Loading Whisper model ({self.whisper_model_size})")
                 self._load_whisper_model()
 
             # Process the video file
+            BBLogger.log(f"[TranscribeLocalVideo] Starting transcription for: {file_path}")
             self._update_status(f"Processing video from pipeline: {os.path.basename(file_path)}")
             success = self._process_video_file(file_path)
 
             if success:
+                BBLogger.log(f"[TranscribeLocalVideo] Successfully transcribed: {os.path.basename(file_path)}")
                 self._update_status(f"Successfully transcribed: {os.path.basename(file_path)}")
                 self.processed_count += 1
             else:
+                BBLogger.log(f"[TranscribeLocalVideo] Failed to transcribe: {os.path.basename(file_path)}")
                 self._update_status(f"Failed to transcribe: {os.path.basename(file_path)}")
 
         except Exception as e:
+            import traceback
             error_msg = f"Error processing pipeline input: {str(e)}"
-            logging.error(error_msg)
+            BBLogger.log(f"[TranscribeLocalVideo] {error_msg}")
+            BBLogger.log(f"[TranscribeLocalVideo] Traceback: {traceback.format_exc()}")
             self._update_status(error_msg) 
