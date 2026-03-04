@@ -1,0 +1,3 @@
+windows:https://datasources.subjectivetechnologies.com/transcribelocalvideo/deps/bin/windows/ffmpeg.exe
+mac:https://datasources.subjectivetechnologies.com/transcribelocalvideo/deps/bin/mac/ffmpeg
+linux:https://datasources.subjectivetechnologies.com/transcribelocalvideo/deps/bin/linux/ffmpeg
