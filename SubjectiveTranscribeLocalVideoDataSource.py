@@ -31,14 +31,8 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
     Converts video files to audio and generates transcriptions stored as JSON context files.
     """
     
-    def __init__(self, name=None, session=None, dependency_data_sources=None, subscribers=None, params=None):
-        super().__init__(
-            name=name,
-            session=session,
-            dependency_data_sources=dependency_data_sources or [],
-            subscribers=subscribers,
-            params=params
-        )
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         
         # Initialize configuration from params or environment variables
         self.whisper_model_size = self.params.get('whisper_model_size') or os.getenv("WHISPER_MODEL_SIZE") or WHISPER_MODEL_SIZE
@@ -57,87 +51,76 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         self.skipped_count = 0
         self._metadata_check_failures = set()
 
-    def fetch(self):
-        """
-        Main method to fetch and process video files for transcription.
-        """
-        try:
-            self._update_status("Starting video transcription process")
+    @classmethod
+    def connection_schema(cls):
+        return {
+            "videos_dir": {
+                "type": "folder_path",
+                "label": "Videos Directory",
+                "description": "Directory containing video files to transcribe",
+                "required": False,
+            },
+            "context_dir": {
+                "type": "folder_path",
+                "label": "Context Output Directory",
+                "description": "Directory where transcription JSON files are saved",
+                "required": False,
+                "default": "context",
+            },
+            "whisper_model_size": {
+                "type": "select",
+                "label": "Whisper Model",
+                "description": "Whisper model size (larger = more accurate but slower)",
+                "options": [
+                    {"value": "tiny", "label": "Tiny (fastest)"},
+                    {"value": "base", "label": "Base"},
+                    {"value": "small", "label": "Small"},
+                    {"value": "medium", "label": "Medium"},
+                    {"value": "large", "label": "Large (most accurate)"},
+                ],
+                "default": "base",
+                "required": False,
+            },
+        }
 
-            if not self.specific_video_path and not self.videos_dir:
-                self._update_status("No videos_dir configured; waiting for pipeline input")
-                return
-            
-            # Get list of video files to process
-            video_files = self._get_video_files()
-            if not video_files:
-                self._update_status("No video files found to process")
-                return
-            
-            # Set up progress tracking
-            self.set_total_items(len(video_files))
-            self.set_processed_items(0)
-            
-            # Create context directory if it doesn't exist
-            os.makedirs(self.context_dir, exist_ok=True)
-            
-            # Load Whisper model once for all transcriptions
-            self._update_status(f"Loading Whisper model ({self.whisper_model_size})")
-            self._load_whisper_model()
-            
-            start_time = time.time()
-            
-            # Process each video file
-            for i, video_file in enumerate(video_files):
-                video_path = video_file if os.path.isabs(video_file) else os.path.join(self.videos_dir, video_file)
-                
-                self._update_status(f"Processing video {i+1}/{len(video_files)}: {os.path.basename(video_path)}")
-                
-                # Check if context file already exists
-                if self._context_file_exists(video_path):
-                    logging.info(f"Context file already exists for {os.path.basename(video_path)}, skipping")
-                    self.skipped_count += 1
-                    self.increment_processed_items()
-                    self._update_progress()
-                    continue
-                
-                # Process the video file
-                success = self._process_video_file(video_path)
-                if success:
-                    self.processed_count += 1
-                
-                self.increment_processed_items()
-                
-                # Update processing time and progress
-                elapsed_time = time.time() - start_time
-                self.set_total_processing_time(elapsed_time)
-                self._update_progress()
-            
-            # Final status update
-            self._update_status(f"Transcription complete. Processed: {self.processed_count}, Skipped: {self.skipped_count}")
-            self.set_fetch_completed(True)
-            
-            # Notify subscribers with summary data
-            summary_data = {
-                "type": "transcription_summary",
-                "processed_count": self.processed_count,
-                "skipped_count": self.skipped_count,
-                "total_files": len(video_files),
-                "context_dir": self.context_dir
-            }
-            self.update(summary_data)
-            
-        except Exception as e:
-            error_msg = f"Error during video transcription: {str(e)}"
-            logging.error(error_msg)
-            self._update_status(error_msg)
-            raise
+    @classmethod
+    def request_schema(cls):
+        return {
+            "path": {
+                "type": "file_path",
+                "label": "Video File Path",
+                "description": "Path to the video file to transcribe. Can be wired from an upstream node (e.g. folder monitor).",
+                "required": False,
+            },
+        }
 
-    def get_icon(self):
-        """
-        Return SVG icon for the video transcription data source.
-        """
-        import os
+    @classmethod
+    def output_schema(cls):
+        return {
+            "transcription": {
+                "type": "textarea",
+                "label": "Transcription",
+                "description": "The full text transcription of the video",
+            },
+            "video_path": {
+                "type": "text",
+                "label": "Video Path",
+                "description": "Path to the source video file",
+            },
+            "video_filename": {
+                "type": "text",
+                "label": "Video Filename",
+                "description": "Filename of the source video",
+            },
+            "output_path": {
+                "type": "text",
+                "label": "Output Path",
+                "description": "Path to the saved transcription JSON file",
+            },
+        }
+
+    @classmethod
+    def icon(cls):
         icon_path = os.path.join(os.path.dirname(__file__), 'icon.svg')
         try:
             if os.path.exists(icon_path):
@@ -145,21 +128,94 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
                     return f.read()
         except Exception:
             pass
-        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2" fill="#111827"/><path d="M10 8L15 11L10 14V8Z" fill="#fff"/></svg>'
+        return (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+            '<rect x="3" y="4" width="18" height="12" rx="2" fill="#111827"/>'
+            '<path d="M10 8L15 11L10 14V8Z" fill="#fff"/></svg>'
+        )
 
-    def get_connection_data(self):
+    def run(self, request):
         """
-        Return connection configuration for the video transcription data source.
+        v2 entry point. Transcribe video file(s) and return results.
+
+        If request contains a 'path' key (e.g. wired from an upstream node),
+        transcribe that single file. Otherwise fall back to scanning videos_dir.
         """
-        return {
-            "connection_type": "LOCAL_VIDEO_TRANSCRIPTION",
-            "fields": [
-                "videos_dir",
-                "context_dir", 
-                "whisper_model_size",
-                "specific_video_path"
-            ]
-        }
+        try:
+            request = request or {}
+
+            input_path = request.get("path") or request.get("specific_video_path")
+            if input_path:
+                self.specific_video_path = input_path
+
+            self._update_status("Starting video transcription process")
+
+            if not self.specific_video_path and not self.videos_dir:
+                self._update_status("No video path provided and no videos_dir configured")
+                return {"transcription": "", "video_path": "", "video_filename": "", "output_path": ""}
+
+            video_files = self._get_video_files()
+            if not video_files:
+                self._update_status("No video files found to process")
+                return {"transcription": "", "video_path": "", "video_filename": "", "output_path": ""}
+
+            self.set_total_items(len(video_files))
+            self.set_processed_items(0)
+
+            os.makedirs(self.context_dir, exist_ok=True)
+
+            self._update_status(f"Loading Whisper model ({self.whisper_model_size})")
+            self._load_whisper_model()
+
+            start_time = time.time()
+            last_result = {"transcription": "", "video_path": "", "video_filename": "", "output_path": ""}
+
+            for i, video_file in enumerate(video_files):
+                video_path = video_file if os.path.isabs(video_file) else os.path.join(self.videos_dir, video_file)
+
+                self._update_status(f"Processing video {i+1}/{len(video_files)}: {os.path.basename(video_path)}")
+
+                if self._context_file_exists(video_path):
+                    logging.info(f"Context file already exists for {os.path.basename(video_path)}, skipping")
+                    self.skipped_count += 1
+                    self.increment_processed_items()
+                    self._update_progress()
+                    continue
+                success = self._process_video_file(video_path)
+                if success:
+                    self.processed_count += 1
+                    last_result = {
+                        "transcription": self._last_transcript if hasattr(self, '_last_transcript') else "",
+                        "video_path": video_path,
+                        "video_filename": os.path.basename(video_path),
+                        "output_path": self._last_output_path if hasattr(self, '_last_output_path') else "",
+                    }
+
+                self.increment_processed_items()
+
+                elapsed_time = time.time() - start_time
+                self.set_total_processing_time(elapsed_time)
+                self._update_progress()
+
+            self._update_status(f"Transcription complete. Processed: {self.processed_count}, Skipped: {self.skipped_count}")
+            self.set_fetch_completed(True)
+
+            summary_data = {
+                "type": "transcription_summary",
+                "processed_count": self.processed_count,
+                "skipped_count": self.skipped_count,
+                "total_files": len(video_files),
+                "context_dir": self.context_dir,
+            }
+            self.update(summary_data)
+
+            return last_result
+
+        except Exception as e:
+            error_msg = f"Error during video transcription: {str(e)}"
+            logging.error(error_msg)
+            self._update_status(error_msg)
+            raise
 
 
     def _get_video_files(self):
@@ -222,6 +278,8 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
                         # Save transcript as JSON
                         output_payload = self._build_transcript_payload(transcript, video_path)
                         output_path = self._write_context_output(output_payload)
+                        self._last_transcript = transcript
+                        self._last_output_path = output_path
                         BBLogger.log(f"Transcript saved to {output_path}")
                         
                         # Notify subscribers with transcription data
@@ -543,83 +601,39 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
                 self.estimated_remaining_time()
             )
 
-    def process_input(self, data):
+    def handle_message(self, message):
         """
-        Process input data from a pipeline dependency (e.g., file change notification).
-        This method is called when this data source is part of a pipeline and receives
-        data from a dependency data source.
-
-        Args:
-            data: Input data from the dependency (typically a file change notification)
+        v2 message handler - receives data from upstream pipeline nodes.
+        Replaces the v1 process_input() method.
         """
         try:
-            BBLogger.log(f"[TranscribeLocalVideo] Received pipeline input: {data}")
+            BBLogger.log(f"[TranscribeLocalVideo] Received message: {message}")
 
-            # Only process 'created' events (new files)
-            if isinstance(data, dict):
-                event_type = data.get('event_type', '')
-                if event_type != 'created':
+            if isinstance(message, dict):
+                event_type = message.get('event_type', '')
+                if event_type and event_type != 'created':
                     BBLogger.log(f"[TranscribeLocalVideo] Ignoring event_type '{event_type}' (only processing 'created')")
                     return
 
-            # Extract the file path from the notification data
             file_path = None
-            if isinstance(data, dict):
-                # Try different common keys for file path
-                file_path = data.get('path') or data.get('dest_path') or data.get('file_path')
-            elif isinstance(data, str):
-                file_path = data
+            if isinstance(message, dict):
+                file_path = message.get('path') or message.get('dest_path') or message.get('file_path')
+            elif isinstance(message, str):
+                file_path = message
 
             if not file_path:
-                BBLogger.log(f"[TranscribeLocalVideo] No file path found in pipeline input: {data}")
+                BBLogger.log(f"[TranscribeLocalVideo] No file path found in message: {message}")
                 return
 
-            # Check if it's a video file
             if not file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
                 BBLogger.log(f"[TranscribeLocalVideo] Ignoring non-video file: {file_path}")
                 return
 
-            # Wait for the file to exist and be fully written (stable size)
-            if not self._wait_for_stable_file(file_path):
-                BBLogger.log(f"[TranscribeLocalVideo] File not available or still being written: {file_path}")
-                return
-
-            # Ensure context_dir is an absolute path
-            if not self.context_dir or self.context_dir == "context":
-                # Use default context directory
-                config = BBConfig()
-                self.context_dir = config.get("context_dir", os.path.join(os.getcwd(), "com_subjective_userdata", "com_subjective_context"))
-                BBLogger.log(f"[TranscribeLocalVideo] Using context_dir: {self.context_dir}")
-
-            os.makedirs(self.context_dir, exist_ok=True)
-
-            # Check if context file already exists
-            if self._context_file_exists(file_path):
-                BBLogger.log(f"[TranscribeLocalVideo] Context file already exists for {os.path.basename(file_path)}, skipping")
-                return
-
-            # Load Whisper model if not already loaded
-            if not self.whisper_model:
-                BBLogger.log(f"[TranscribeLocalVideo] Loading Whisper model ({self.whisper_model_size})")
-                self._update_status(f"Loading Whisper model ({self.whisper_model_size})")
-                self._load_whisper_model()
-
-            # Process the video file
-            BBLogger.log(f"[TranscribeLocalVideo] Starting transcription for: {file_path}")
-            self._update_status(f"Processing video from pipeline: {os.path.basename(file_path)}")
-            success = self._process_video_file(file_path)
-
-            if success:
-                BBLogger.log(f"[TranscribeLocalVideo] Successfully transcribed: {os.path.basename(file_path)}")
-                self._update_status(f"Successfully transcribed: {os.path.basename(file_path)}")
-                self.processed_count += 1
-            else:
-                BBLogger.log(f"[TranscribeLocalVideo] Failed to transcribe: {os.path.basename(file_path)}")
-                self._update_status(f"Failed to transcribe: {os.path.basename(file_path)}")
+            return self.run({"path": file_path})
 
         except Exception as e:
             import traceback
-            error_msg = f"Error processing pipeline input: {str(e)}"
+            error_msg = f"Error handling message: {str(e)}"
             BBLogger.log(f"[TranscribeLocalVideo] {error_msg}")
             BBLogger.log(f"[TranscribeLocalVideo] Traceback: {traceback.format_exc()}")
             self._update_status(error_msg) 
