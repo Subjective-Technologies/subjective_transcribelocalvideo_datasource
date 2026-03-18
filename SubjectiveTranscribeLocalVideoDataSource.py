@@ -33,13 +33,34 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        
-        # Initialize configuration from params or environment variables
-        self.whisper_model_size = self.params.get('whisper_model_size') or os.getenv("WHISPER_MODEL_SIZE") or WHISPER_MODEL_SIZE
-        self.videos_dir = self.params.get('videos_dir') or os.getenv("VIDEOS_DIR")
-        context_dir = self.params.get('context_dir') or self.params.get("TARGET_DIRECTORY") or os.getenv("CONTEXT_DIR")
+
+        # Dual-read: _connection (v2) takes priority, params (v1) as fallback.
+        conn = getattr(self, "_connection", {}) or {}
+        params = self.params if isinstance(self.params, dict) else {}
+
+        self.whisper_model_size = (
+            conn.get("whisper_model_size")
+            or params.get("whisper_model_size")
+            or os.getenv("WHISPER_MODEL_SIZE")
+            or WHISPER_MODEL_SIZE
+        )
+        self.videos_dir = (
+            conn.get("videos_dir")
+            or params.get("videos_dir")
+            or os.getenv("VIDEOS_DIR")
+        )
+        context_dir = (
+            conn.get("context_dir")
+            or params.get("context_dir")
+            or conn.get("TARGET_DIRECTORY")
+            or params.get("TARGET_DIRECTORY")
+            or os.getenv("CONTEXT_DIR")
+        )
         self.context_dir = context_dir if context_dir else "context"
-        self.specific_video_path = self.params.get('specific_video_path', None)
+        self.specific_video_path = (
+            conn.get("specific_video_path")
+            or params.get("specific_video_path")
+        )
 
         self._configure_ffmpeg()
         
@@ -584,7 +605,7 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         """
         Update status via callback if available.
         """
-        if self.status_callback:
+        if getattr(self, "status_callback", None):
             self.status_callback(self.get_name(), status)
         BBLogger.log(f"[{self.get_name()}] {status}")
         logging.info(f"[{self.get_name()}] {status}")
@@ -593,7 +614,7 @@ class SubjectiveTranscribeLocalVideoDataSource(SubjectiveDataSource):
         """
         Update progress via callback if available.
         """
-        if self.progress_callback:
+        if getattr(self, "progress_callback", None):
             self.progress_callback(
                 self.get_name(),
                 self.get_total_to_process(),
